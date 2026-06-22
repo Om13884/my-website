@@ -1,0 +1,272 @@
+{
+  "name": "2 — Contact Form: Client Reply → Booking → Calendar → Sheets",
+  "nodes": [
+    {
+      "parameters": {
+        "filters": {
+          "q": "subject:NXF- in:inbox is:unread -from:omkar13884@gmail.com"
+        },
+        "options": {}
+      },
+      "id": "node-gmail-trigger-01",
+      "name": "Watch Inbox for Replies (Gmail)",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1,
+      "position": [180, 300],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "nH69kOxuKXOIYGwc",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Extract Submission ID and Chosen Slot from Client's Reply ──\nconst email = $input.first().json;\n\n// ── 1. Subject extraction ──\nlet subject = '';\nif (email.Subject) {\n  subject = String(email.Subject);\n} else if (email.subject) {\n  subject = String(email.subject);\n} else if (Array.isArray(email.payload?.headers)) {\n  const hdr = email.payload.headers.find(h => h.name?.toLowerCase() === 'subject');\n  if (hdr) subject = hdr.value || '';\n} else if (email.headers?.Subject || email.headers?.subject) {\n  subject = email.headers.Subject || email.headers.subject;\n}\n\n// ── 2. Extract NXF- ID ──\nconst idMatch = subject.match(/NXF-[\\w\\d-]+/i);\nconst submissionId = idMatch ? idMatch[0].toUpperCase() : null;\n\nif (!submissionId) {\n  return [{ json: { _skip: true, reason: 'No NXF- ID found in subject', subject } }];\n}\n\n// ── 3. Body extraction ──\nlet body = '';\nif (email.text && email.text.trim()) {\n  body = email.text;\n} else if (email.html && email.html.trim()) {\n  body = email.html.replace(/<[^>]+>/g, ' ');\n} else if (email.snippet) {\n  body = email.snippet;\n} else if (email.payload?.body?.data) {\n  try { body = Buffer.from(email.payload.body.data, 'base64url').toString('utf-8'); } catch(e) {\n    try { body = Buffer.from(email.payload.body.data, 'base64').toString('utf-8'); } catch(e2) {}\n  }\n} else if (Array.isArray(email.payload?.parts)) {\n  const findPart = (parts, mime) => {\n    for (const p of parts) {\n      if (p.mimeType === mime && p.body?.data) return p.body.data;\n      if (Array.isArray(p.parts)) { const n = findPart(p.parts, mime); if (n) return n; }\n    }\n    return null;\n  };\n  const raw = findPart(email.payload.parts, 'text/plain') || findPart(email.payload.parts, 'text/html');\n  if (raw) {\n    try { body = Buffer.from(raw, 'base64url').toString('utf-8').replace(/<[^>]+>/g, ' '); } catch(e) {\n      try { body = Buffer.from(raw, 'base64').toString('utf-8').replace(/<[^>]+>/g, ' '); } catch(e2) {}\n    }\n  }\n}\n\n// ── 4. Extract slot choice ──\nconst wordToNum = { one:1, two:2, three:3, four:4, five:5 };\nconst patterns = [\n  /(?:option|slot|choice|#)\\s*([1-5])/i,\n  /\\b([1-5])\\b/,\n  /\\b(one|two|three|four|five)\\b/i,\n];\nlet slotChoice = null;\nfor (const pat of patterns) {\n  const m = body.match(pat);\n  if (m) { slotChoice = parseInt(m[1]) || wordToNum[m[1]?.toLowerCase()] || null; if (slotChoice) break; }\n}\nif (!slotChoice && /\\b(yes|ok|okay|confirm|confirmed|works|good|perfect|sure|great|sounds good|see you|deal|fine)\\b/i.test(body)) {\n  slotChoice = 1;\n}\nif (!slotChoice) slotChoice = 1;\n\n// ── 5. Client email extraction ──\nlet clientEmail = '';\nconst rawFrom = email.From || email.from || '';\nif (typeof rawFrom === 'string') {\n  clientEmail = rawFrom;\n} else if (rawFrom?.value?.[0]?.address) {\n  clientEmail = rawFrom.value[0].address;\n} else if (Array.isArray(rawFrom)) {\n  clientEmail = rawFrom[0]?.address || rawFrom[0] || '';\n}\nif (!clientEmail && Array.isArray(email.payload?.headers)) {\n  const hdr = email.payload.headers.find(h => h.name?.toLowerCase() === 'from');\n  if (hdr) clientEmail = hdr.value || '';\n}\nconst emailMatch = clientEmail.match(/<(.+?)>/);\nif (emailMatch) clientEmail = emailMatch[1].trim();\n\nreturn [{\n  json: {\n    _skip: false,\n    submissionId,\n    slotChoice,\n    clientEmail,\n    emailSubject: subject,\n    emailBody: body.slice(0, 600)\n  }\n}];"
+      },
+      "id": "node-code-02",
+      "name": "Extract ID + Slot Choice",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-skip-check",
+              "leftValue": "={{ $json._skip }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if-skip",
+      "name": "Is Valid Booking Reply?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1xn96KBeYO6osMkYp8jX0bB5LFkGQ4LJ5OrLwEUYkPHw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Submissions",
+          "mode": "name"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "submissionId",
+              "lookupValue": "={{ $json.submissionId }}"
+            }
+          ]
+        },
+        "options": {
+          "returnAllMatches": false
+        }
+      },
+      "id": "node-sheets-02",
+      "name": "Find Submission in Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [900, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "CONNECT_YOUR_GOOGLE_SHEETS_CREDENTIAL",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Merge Reply Data with Original Submission + Pick Chosen Slot ──\nconst replyData = $('Extract ID + Slot Choice').first().json;\nconst sheetRow  = $input.first().json;\n\n// Guard: if no sheet row found for this submission ID, stop cleanly\nconst hasRow = sheetRow && (\n  sheetRow['Submission ID'] || sheetRow.submissionId ||\n  sheetRow['Email']         || sheetRow.email ||\n  sheetRow['First Name']    || sheetRow.firstName\n);\nif (!hasRow) {\n  throw new Error(\n    'No sheet row found for ' + replyData.submissionId +\n    '. The original form submission may have been saved before the sheet was configured.'\n  );\n}\n\n// Parse slots JSON saved by Workflow 1\nlet slots = [];\ntry {\n  const raw = sheetRow['Slots JSON'] || sheetRow.slotsJSON || '[]';\n  slots = JSON.parse(raw);\n} catch(e) { slots = []; }\n\nif (!slots.length) {\n  throw new Error(\n    'Slots JSON is empty for ' + replyData.submissionId +\n    '. The Slots JSON column may be missing from the sheet header row.'\n  );\n}\n\n// Get chosen slot (1-indexed)\nconst choice = parseInt(replyData.slotChoice) || 1;\nconst chosen = slots.find(s => s.index === choice) || slots[choice - 1] || slots[0];\n\n// Client email: prefer reply address, fall back to sheet\nconst clientEmail = replyData.clientEmail || sheetRow['Email'] || sheetRow.email || '';\n\n// Country and timezone from sheet (populated by Workflow 1)\nconst country  = sheetRow['Country']         || sheetRow.country  || '';\nconst clientTz = sheetRow['Client Timezone'] || sheetRow.clientTz || '';\n\n// labelClient shows time in client's own timezone (set by Workflow 1);\n// falls back to IST label if country was unknown at submission time.\nconst chosenSlotLabelClient = chosen.labelClient || chosen.label;\n\nreturn [{\n  json: {\n    firstName:              sheetRow['First Name']  || sheetRow.firstName  || 'Client',\n    lastName:               sheetRow['Last Name']   || sheetRow.lastName   || '',\n    email:                  clientEmail,\n    phone:                  sheetRow['Phone']        || sheetRow.phone      || '',\n    country,\n    clientTz,\n    company:                sheetRow['Company']      || sheetRow.company    || '',\n    service:                sheetRow['Service']      || sheetRow.service    || 'Strategy Call',\n    message:                sheetRow['Message']      || sheetRow.message    || '',\n    submissionId:           replyData.submissionId,\n    chosenSlotLabel:        chosen.label,\n    chosenSlotLabelClient,\n    chosenSlotStartISO:     chosen.startISO,\n    chosenSlotEndISO:       chosen.endISO,\n    rowIndex:               sheetRow._rowNumber || sheetRow.row || 2\n  }\n}];"
+      },
+      "id": "node-code-03",
+      "name": "Prepare Booking Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1140, 300]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "calendar": {
+          "__rl": true,
+          "value": "primary",
+          "mode": "list",
+          "cachedResultName": "primary"
+        },
+        "start": "={{ $json.chosenSlotStartISO }}",
+        "end":   "={{ $json.chosenSlotEndISO }}",
+        "additionalFields": {
+          "summary":     "=Omkar Strategy Call — {{ $json.firstName }} {{ $json.lastName }}",
+          "description": "=30-minute free strategy call with {{ $json.firstName }} {{ $json.lastName }}\n\nService Interest: {{ $json.service }}\nCompany: {{ $json.company }}\nEmail: {{ $json.email }}\nPhone: {{ $json.phone }}\nCountry: {{ $json.country }}\n\nOriginal Message:\n{{ $json.message }}\n\nRef: {{ $json.submissionId }}",
+          "attendees":   "={{ [$json.email] }}",
+          "conferenceDataVersion": 1,
+          "sendUpdates": "all"
+        }
+      },
+      "id": "node-cal-01",
+      "name": "Create Google Calendar Event + Meet",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1,
+      "position": [1380, 300],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "CONNECT_YOUR_GOOGLE_CALENDAR_CREDENTIAL",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Merge booking data with the calendar event result ──\nconst booking  = $('Prepare Booking Data').first().json;\nconst calEvent = $input.first().json;\n\nconst meetLink = calEvent.hangoutLink || calEvent.conferenceData?.entryPoints?.[0]?.uri || 'https://meet.google.com';\nconst calLink  = calEvent.htmlLink || '';\nconst eventId  = calEvent.id || '';\n\nreturn [{\n  json: {\n    ...booking,\n    meetLink,\n    calLink,\n    eventId,\n    bookingConfirmedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node-code-04",
+      "name": "Extract Meet Link",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1620, 300]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "1xn96KBeYO6osMkYp8jX0bB5LFkGQ4LJ5OrLwEUYkPHw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Submissions",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "submissionId":        "={{ $json.submissionId }}",
+            "status":              "booked",
+            "chosenSlotLabel":     "={{ $json.chosenSlotLabel }}",
+            "eventId":             "={{ $json.eventId }}",
+            "meetLink":            "={{ $json.meetLink }}",
+            "bookingConfirmedAt":  "={{ $json.bookingConfirmedAt }}"
+          },
+          "matchingColumns": ["submissionId"]
+        },
+        "options": {}
+      },
+      "id": "node-sheets-03",
+      "name": "Update Sheet: Mark Booked",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1860, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "CONNECT_YOUR_GOOGLE_SHEETS_CREDENTIAL",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.email }}",
+        "subject": "=✅ Booking Confirmed — {{ $json.chosenSlotLabelClient }}",
+        "emailType": "html",
+        "message": "=<div style=\"font-family:Arial,sans-serif;max-width:580px;margin:0 auto;color:#111;line-height:1.6;\">\n<p>Hi {{ $json.firstName }},</p>\n<p>Your strategy call with Omkar is confirmed! Here are your details:</p>\n<div style=\"background:#f0fff4;border-left:4px solid #22c55e;padding:20px;border-radius:6px;margin:20px 0;\">\n  <p style=\"margin:0 0 10px;\"><strong>📅 Date &amp; Time:</strong> {{ $json.chosenSlotLabelClient }}</p>\n  <p style=\"margin:0 0 10px;\"><strong>⏱ Duration:</strong> 30 minutes</p>\n  <p style=\"margin:0 0 10px;\"><strong>📋 Service:</strong> {{ $json.service }}</p>\n  <p style=\"margin:0;\"><strong>🔗 Google Meet Link:</strong><br><a href=\"{{ $json.meetLink }}\" style=\"color:#6366f1;\">{{ $json.meetLink }}</a></p>\n</div>\n<p style=\"font-size:13px;color:#555;\">{{ $json.clientTz ? 'Time shown above is in your local timezone. The invite on your calendar is set to the same time.' : 'Time shown above is IST (Bangalore, India, UTC+5:30). Please adjust to your local timezone if needed.' }}</p>\n<p>A Google Calendar invite has been sent to your inbox. You can join the call directly from the Meet link above at the scheduled time.</p>\n<p>If you need to reschedule or have any questions before the call, just reply to this email.</p>\n<p>Looking forward to speaking with you!</p>\n<p>Best,<br><strong>Omkar Biradar</strong><br>AI Automation Consultant<br>omkar13884@gmail.com | +91 99727 34513</p>\n<hr style=\"border:none;border-top:1px solid #eee;margin:24px 0;\">\n<p style=\"font-size:11px;color:#aaa;\">Ref: {{ $json.submissionId }}</p>\n</div>",
+        "options": {
+          "replyTo": "omkar13884@gmail.com",
+          "senderName": "Omkar Biradar"
+        }
+      },
+      "id": "node-gmail-03",
+      "name": "Email Client: Booking Confirmed",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [2100, 160],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "nH69kOxuKXOIYGwc",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "omkar13884@gmail.com",
+        "subject": "=📅 Booking Confirmed: {{ $json.firstName }} {{ $json.lastName }} — {{ $json.chosenSlotLabel }}",
+        "emailType": "text",
+        "message": "=A new strategy call has been booked!\n\nRef: {{ $json.submissionId }}\n\n── CLIENT ───────────────────────────\nName:      {{ $json.firstName }} {{ $json.lastName }}\nEmail:     {{ $json.email }}\nPhone:     {{ $json.phone }}\nCountry:   {{ $json.country }}\nTimezone:  {{ $json.clientTz }}\nCompany:   {{ $json.company }}\nService:   {{ $json.service }}\n\n── BOOKING ──────────────────────────\nSlot (IST):     {{ $json.chosenSlotLabel }}\nSlot (Client):  {{ $json.chosenSlotLabelClient }}\nMeet Link:      {{ $json.meetLink }}\nCalendar:       {{ $json.calLink }}\nConfirmed:      {{ $json.bookingConfirmedAt }}\n\n── ORIGINAL MESSAGE ─────────────────\n{{ $json.message }}",
+        "options": {
+          "senderName": "Omkar Booking System"
+        }
+      },
+      "id": "node-gmail-04",
+      "name": "Email Omkar: Booking Details",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [2100, 440],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "nH69kOxuKXOIYGwc",
+          "name": "Gmail account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Watch Inbox for Replies (Gmail)": {
+      "main": [[{ "node": "Extract ID + Slot Choice", "type": "main", "index": 0 }]]
+    },
+    "Extract ID + Slot Choice": {
+      "main": [[{ "node": "Is Valid Booking Reply?", "type": "main", "index": 0 }]]
+    },
+    "Is Valid Booking Reply?": {
+      "main": [
+        [{ "node": "Find Submission in Sheets", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Find Submission in Sheets": {
+      "main": [[{ "node": "Prepare Booking Data", "type": "main", "index": 0 }]]
+    },
+    "Prepare Booking Data": {
+      "main": [[{ "node": "Create Google Calendar Event + Meet", "type": "main", "index": 0 }]]
+    },
+    "Create Google Calendar Event + Meet": {
+      "main": [[{ "node": "Extract Meet Link", "type": "main", "index": 0 }]]
+    },
+    "Extract Meet Link": {
+      "main": [[{ "node": "Update Sheet: Mark Booked", "type": "main", "index": 0 }]]
+    },
+    "Update Sheet: Mark Booked": {
+      "main": [[
+        { "node": "Email Client: Booking Confirmed", "type": "main", "index": 0 },
+        { "node": "Email Omkar: Booking Details",    "type": "main", "index": 0 }
+      ]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "versionId": "nexflow-booking-v4",
+  "id": "nexflow-workflow-2",
+  "tags": []
+}

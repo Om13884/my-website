@@ -1,0 +1,32 @@
+[
+  {
+    "id": 1,
+    "q": "How long does it take to build and launch an automation system?",
+    "a": "Most starter automations are live within 2–3 weeks. Growth-tier projects typically take 4–6 weeks. Enterprise systems with multiple integrations can take 6–10 weeks. We always start with a clear timeline during our discovery call."
+  },
+  {
+    "id": 2,
+    "q": "Do I need any technical knowledge to use the systems you build?",
+    "a": "No. We build everything with non-technical users in mind. Every system comes with full documentation and a team training session. If something breaks or needs updating, we handle it — that's what ongoing support is for."
+  },
+  {
+    "id": 3,
+    "q": "What tools and platforms do you integrate with?",
+    "a": "We work with virtually any modern business tool — HubSpot, Salesforce, Shopify, Klaviyo, GoHighLevel, Slack, Notion, Google Workspace, and hundreds more via API integrations with Make.com, Zapier, and n8n."
+  },
+  {
+    "id": 4,
+    "q": "What happens if an automation breaks after launch?",
+    "a": "All projects include post-launch support (2–60 days depending on tier). We set up monitoring for critical automations and will be alerted immediately if something fails. For ongoing peace of mind, we offer monthly retainer packages with SLAs."
+  },
+  {
+    "id": 5,
+    "q": "Can you automate something specific that's not on your service list?",
+    "a": "Almost certainly yes. Our service list represents the most common automation categories — but we've automated everything from legal contract workflows to restaurant inventory management. Book a call and tell us what you need."
+  },
+  {
+    "id": 6,
+    "q": "Do you offer ongoing retainers or is it project-based only?",
+    "a": "Both. Most clients start with a project, then move to a monthly retainer for ongoing optimization, new automation builds, and system maintenance. Retainers start at $1,500/month and scale with your needs."
+  }
+]

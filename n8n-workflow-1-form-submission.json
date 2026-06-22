@@ -1,0 +1,209 @@
+{
+  "name": "1 — Contact Form: Receive → AI Score → Slots → Sheets → Emails",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "contact-form",
+        "responseMode": "onReceived",
+        "responseData": "success",
+        "options": {}
+      },
+      "id": "node-wh-01",
+      "name": "Receive Form (Webhook)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "nexflow-contact-form"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=New contact form submission:\n\nName: {{ $json.firstName }} {{ $json.lastName }}\nEmail: {{ $json.email }}\nPhone: {{ $json.phone }}\nCountry: {{ $json.country }}\nCompany: {{ $json.company }}\nMonthly Revenue: {{ $json.revenue }}\nService: {{ $json.service }}\nTimeline: {{ $json.timeline }}\nSubmitted: {{ $json.submittedAt }}\n\nMessage:\n{{ $json.message }}\n\nAnalyze this lead and return ONLY the lead summary — no JSON, no code blocks, just plain text.",
+        "options": {
+          "systemMessage": "You are an AI assistant for Omkar Biradar, an embedded AI automation consultant in Bangalore, India.\n\nA new contact form has arrived. Analyze it and return a plain-text LEAD SUMMARY for Omkar.\n\nFormat:\n- Line 1: Score — 🔥 HOT / 🟡 WARM / ❄️ COLD (judge by message clarity, urgency, budget, company size)\n- Bullet points: name, company, email, service requested, revenue range, timeline, core problem they need solved, any red flags\n- Last line — Recommended action: one clear next step (e.g. \"Call within 2 hours — specific ask, strong budget signal\")\n\nReturn plain text only. No JSON. No markdown headers."
+        }
+      },
+      "id": "node-ai-01",
+      "name": "AI Agent: Score Lead",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "node-or-01",
+      "name": "OpenRouter Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [240, 500],
+      "credentials": {
+        "openRouterApi": {
+          "id": "lS8e04DaGaqBXdGR",
+          "name": "OpenRouter account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "primary",
+          "mode": "list",
+          "cachedResultName": "primary"
+        },
+        "returnAll": true,
+        "options": {
+          "timeMin": "={{ new Date().toISOString() }}",
+          "timeMax": "={{ new Date(Date.now() + 21 * 86400000).toISOString() }}"
+        }
+      },
+      "id": "node-cal-check-01",
+      "name": "Check Calendar Availability",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1,
+      "alwaysOutputData": true,
+      "position": [500, 300],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "CONNECT_YOUR_GOOGLE_CALENDAR_CREDENTIAL",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Parse AI lead summary + check calendar + generate timezone-aware slots ──\n\nconst agentOut = $('AI Agent: Score Lead').first().json;\nconst raw = $('Receive Form (Webhook)').first().json;\n\n// n8n webhook node puts body fields at top-level AND keeps a 'body' object.\nconst form = (raw.firstName || raw.email) ? raw : (raw.body || raw);\n\nconst firstName   = String(form.firstName   || '').trim();\nconst lastName    = String(form.lastName    || '').trim();\nconst email       = String(form.email       || '').trim();\nconst phone       = String(form.phone       || '').trim();\nconst company     = String(form.company     || '').trim();\nconst revenue     = String(form.revenue     || '').trim();\nconst service     = String(form.service     || '').trim();\nconst timeline    = String(form.timeline    || '').trim();\nconst message     = String(form.message     || '').trim();\nconst country     = String(form.country     || '').trim();\nconst submittedAt = String(form.submittedAt || new Date().toISOString());\n\n// Extract lead summary from agent output\nconst leadSummary = agentOut.output || agentOut.text || agentOut.message?.content ||\n  '⚠️ AI scoring unavailable — review manually.';\n\n// ── Country → IANA timezone lookup ──\nconst COUNTRY_TZ = {\n  'usa': 'America/New_York', 'us': 'America/New_York',\n  'united states': 'America/New_York', 'united states of america': 'America/New_York',\n  'usa - east': 'America/New_York', 'usa - eastern': 'America/New_York',\n  'usa - central': 'America/Chicago',\n  'usa - mountain': 'America/Denver',\n  'usa - west': 'America/Los_Angeles', 'usa - pacific': 'America/Los_Angeles',\n  'uk': 'Europe/London', 'united kingdom': 'Europe/London',\n  'gb': 'Europe/London', 'england': 'Europe/London',\n  'canada': 'America/Toronto', 'canada - west': 'America/Vancouver',\n  'australia': 'Australia/Sydney', 'australia - perth': 'Australia/Perth',\n  'uae': 'Asia/Dubai', 'dubai': 'Asia/Dubai',\n  'singapore': 'Asia/Singapore', 'germany': 'Europe/Berlin',\n  'france': 'Europe/Paris', 'netherlands': 'Europe/Amsterdam',\n  'india': 'Asia/Kolkata', 'japan': 'Asia/Tokyo',\n  'china': 'Asia/Shanghai', 'hong kong': 'Asia/Hong_Kong',\n  'brazil': 'America/Sao_Paulo', 'mexico': 'America/Mexico_City',\n  'south africa': 'Africa/Johannesburg', 'kenya': 'Africa/Nairobi',\n  'israel': 'Asia/Jerusalem', 'turkey': 'Europe/Istanbul',\n  'sweden': 'Europe/Stockholm', 'norway': 'Europe/Oslo',\n  'new zealand': 'Pacific/Auckland', 'malaysia': 'Asia/Kuala_Lumpur',\n  'indonesia': 'Asia/Jakarta', 'philippines': 'Asia/Manila',\n  'thailand': 'Asia/Bangkok', 'pakistan': 'Asia/Karachi',\n  'bangladesh': 'Asia/Dhaka', 'sri lanka': 'Asia/Colombo'\n};\n\nconst clientTz = COUNTRY_TZ[country.toLowerCase()] || null;\n\nfunction formatInTz(utcMs, tz) {\n  try {\n    return new Intl.DateTimeFormat('en-US', {\n      timeZone: tz, weekday: 'long', month: 'short', day: 'numeric',\n      hour: 'numeric', minute: '2-digit', hour12: true, timeZoneName: 'short'\n    }).format(new Date(utcMs));\n  } catch(e) { return ''; }\n}\n\n// ── Calendar busy times ($input = Check Calendar Availability output) ──\n// alwaysOutputData:true ensures this runs even when calendar has 0 events.\nconst calItems = $input.all();\nconst busyTimes = calItems\n  .map(item => item.json)\n  .filter(e => e && e.start)\n  .map(e => ({\n    start: new Date(e.start.dateTime || (e.start.date + 'T00:00:00')).getTime(),\n    end:   new Date(e.end.dateTime   || (e.end.date   + 'T23:59:59')).getTime()\n  }))\n  .filter(b => !isNaN(b.start) && !isNaN(b.end));\n\nfunction isAvailable(slotStartMs, slotEndMs) {\n  return !busyTimes.some(b => slotStartMs < b.end && slotEndMs > b.start);\n}\n\n// ── Time slot generation (Mon–Fri IST, skip busy calendar events) ──\nconst IST = 19800000; // UTC+5:30 in ms\n\nfunction istLabel(utcMs) {\n  const d = new Date(utcMs + IST);\n  const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];\n  const MON  = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];\n  const h = d.getUTCHours(), m = d.getUTCMinutes();\n  const ap = h >= 12 ? 'PM' : 'AM';\n  const h12 = h % 12 || 12;\n  return DAYS[d.getUTCDay()] + ', ' + d.getUTCDate() + ' ' + MON[d.getUTCMonth()] +\n         ' at ' + h12 + ':' + String(m).padStart(2,'0') + ' ' + ap + ' IST';\n}\n\nconst PREFS = [{h:10,m:30},{h:12,m:0},{h:15,m:0},{h:17,m:0}];\nconst now = new Date();\nconst slots = [];\nlet dayOffset = 1;\n\nwhile (slots.length < 5 && dayOffset <= 21) {\n  const baseUTC = new Date(now.getTime() + dayOffset * 86400000);\n  const baseIST = new Date(baseUTC.getTime() + IST);\n  const dow = baseIST.getUTCDay();\n  if (dow >= 1 && dow <= 5) {\n    for (const p of PREFS) {\n      if (slots.length >= 5) break;\n      const utcMs = Date.UTC(\n        baseIST.getUTCFullYear(), baseIST.getUTCMonth(), baseIST.getUTCDate(),\n        p.h, p.m, 0, 0\n      ) - IST;\n      const endMs = utcMs + 1800000;\n\n      if (!isAvailable(utcMs, endMs)) continue;\n\n      const base = istLabel(utcMs);\n      let labelClient = base;\n      if (clientTz) {\n        const localStr = formatInTz(utcMs, clientTz);\n        if (localStr) labelClient = localStr + '  (' + base + ')';\n      }\n\n      slots.push({\n        index:       slots.length + 1,\n        label:       base,\n        labelClient: labelClient,\n        startISO:    new Date(utcMs).toISOString(),\n        endISO:      new Date(endMs).toISOString()\n      });\n    }\n  }\n  dayOffset++;\n}\n\nconst submissionId = 'NXF-' + Date.now();\nconst slotsJSON = JSON.stringify(slots);\nconst slotsText = slots.map(s => 'Option ' + s.index + ': ' + s.label).join('\\n');\nconst slotsHTML = slots.map(s =>\n  '<p style=\"margin:6px 0;\"><strong>Option ' + s.index + ':</strong> ' + s.labelClient + '</p>'\n).join('');\n\nreturn [{\n  json: {\n    firstName, lastName, email, phone, company, revenue, service,\n    timeline, message, country, submittedAt, leadSummary, submissionId,\n    slotsJSON, slotsText, slotsHTML,\n    clientTz: clientTz || '',\n    calendarChecked: busyTimes.length > 0\n  }\n}];"
+      },
+      "id": "node-code-01",
+      "name": "Parse AI + Generate Slots + ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [760, 300]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1xn96KBeYO6osMkYp8jX0bB5LFkGQ4LJ5OrLwEUYkPHw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Submissions",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Submission ID":   "={{ $json.submissionId }}",
+            "First Name":      "={{ $json.firstName }}",
+            "Last Name":       "={{ $json.lastName }}",
+            "Email":           "={{ $json.email }}",
+            "Phone":           "={{ $json.phone }}",
+            "Country":         "={{ $json.country }}",
+            "Client Timezone": "={{ $json.clientTz }}",
+            "Company":         "={{ $json.company }}",
+            "Revenue":         "={{ $json.revenue }}",
+            "Service":         "={{ $json.service }}",
+            "Timeline":        "={{ $json.timeline }}",
+            "Message":         "={{ $json.message }}",
+            "Submitted At":    "={{ $json.submittedAt }}",
+            "Lead Score":      "={{ $json.leadSummary.split('\\n')[0] }}",
+            "Status":          "pending",
+            "Slots JSON":      "={{ $json.slotsJSON }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "node-sheets-01",
+      "name": "Save to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1000, 300],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "CONNECT_YOUR_GOOGLE_SHEETS_CREDENTIAL",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Parse AI + Generate Slots + ID').first().json.email }}",
+        "subject": "=Available Time Slots — Ref: {{ $('Parse AI + Generate Slots + ID').first().json.submissionId }}",
+        "emailType": "html",
+        "message": "=<div style=\"font-family:Arial,sans-serif;max-width:580px;margin:0 auto;color:#111;line-height:1.6;\">\n<p>Hi {{ $('Parse AI + Generate Slots + ID').first().json.firstName }},</p>\n<p>Thanks for reaching out about <strong>{{ $('Parse AI + Generate Slots + ID').first().json.service }}</strong>. I'd love to connect over a free 30-minute strategy call.</p>\n<p>Here are my available slots — <em>{{ $('Parse AI + Generate Slots + ID').first().json.clientTz ? 'times shown in your local timezone (IST equivalent in parentheses)' : 'all times in IST — Bangalore, India (UTC+5:30)' }}</em>:</p>\n<div style=\"background:#f5f5ff;border-left:4px solid #6366f1;padding:16px;border-radius:6px;margin:20px 0;\">\n{{ $('Parse AI + Generate Slots + ID').first().json.slotsHTML }}\n</div>\n<p><strong>Reply to this email</strong> with the option number that works for you — e.g. <em>\"Option 2 works for me\"</em> — and I'll confirm your booking with a Google Meet link right away.</p>\n<p>If none of these times work, just tell me your preferred window and I'll do my best to accommodate.</p>\n<p>Best,<br><strong>Omkar Biradar</strong><br>AI Automation Consultant<br>omkar13884@gmail.com | +91 99727 34513</p>\n<hr style=\"border:none;border-top:1px solid #eee;margin:24px 0;\">\n<p style=\"font-size:11px;color:#aaa;\">Ref: {{ $('Parse AI + Generate Slots + ID').first().json.submissionId }} — keep this in your reply so I can match your booking.</p>\n</div>",
+        "options": {
+          "replyTo": "omkar13884@gmail.com",
+          "senderName": "Omkar Biradar"
+        }
+      },
+      "id": "node-gmail-01",
+      "name": "Email Client: Time Slots",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1240, 160],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "nH69kOxuKXOIYGwc",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "omkar13884@gmail.com",
+        "subject": "=🔔 New Lead: {{ $('Parse AI + Generate Slots + ID').first().json.firstName }} {{ $('Parse AI + Generate Slots + ID').first().json.lastName }} — {{ $('Parse AI + Generate Slots + ID').first().json.service }}",
+        "emailType": "text",
+        "message": "=── AI LEAD SCORE ────────────────────\n{{ $('Parse AI + Generate Slots + ID').first().json.leadSummary }}\n\n── CONTACT DETAILS ──────────────────\nName:      {{ $('Parse AI + Generate Slots + ID').first().json.firstName }} {{ $('Parse AI + Generate Slots + ID').first().json.lastName }}\nEmail:     {{ $('Parse AI + Generate Slots + ID').first().json.email }}\nPhone:     {{ $('Parse AI + Generate Slots + ID').first().json.phone }}\nCountry:   {{ $('Parse AI + Generate Slots + ID').first().json.country }}\nCompany:   {{ $('Parse AI + Generate Slots + ID').first().json.company }}\nRevenue:   {{ $('Parse AI + Generate Slots + ID').first().json.revenue }}\nService:   {{ $('Parse AI + Generate Slots + ID').first().json.service }}\nTimeline:  {{ $('Parse AI + Generate Slots + ID').first().json.timeline }}\nRef ID:    {{ $('Parse AI + Generate Slots + ID').first().json.submissionId }}\nSubmitted: {{ $('Parse AI + Generate Slots + ID').first().json.submittedAt }}\n\n── MESSAGE ──────────────────────────\n{{ $('Parse AI + Generate Slots + ID').first().json.message }}\n\n── TIME SLOTS SENT TO CLIENT ────────\n(Calendar checked: {{ $('Parse AI + Generate Slots + ID').first().json.calendarChecked ? 'YES — busy slots excluded' : 'No existing events found' }})\n{{ $('Parse AI + Generate Slots + ID').first().json.slotsText }}\n\nWaiting for client to reply with their preferred slot.",
+        "options": {
+          "senderName": "Omkar Contact Form"
+        }
+      },
+      "id": "node-gmail-02",
+      "name": "Email Omkar: Lead Score + Details",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1240, 440],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "nH69kOxuKXOIYGwc",
+          "name": "Gmail account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Receive Form (Webhook)": {
+      "main": [[{ "node": "AI Agent: Score Lead", "type": "main", "index": 0 }]]
+    },
+    "OpenRouter Chat Model": {
+      "ai_languageModel": [[{ "node": "AI Agent: Score Lead", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "AI Agent: Score Lead": {
+      "main": [[{ "node": "Check Calendar Availability", "type": "main", "index": 0 }]]
+    },
+    "Check Calendar Availability": {
+      "main": [[{ "node": "Parse AI + Generate Slots + ID", "type": "main", "index": 0 }]]
+    },
+    "Parse AI + Generate Slots + ID": {
+      "main": [[{ "node": "Save to Google Sheets", "type": "main", "index": 0 }]]
+    },
+    "Save to Google Sheets": {
+      "main": [[
+        { "node": "Email Client: Time Slots",          "type": "main", "index": 0 },
+        { "node": "Email Omkar: Lead Score + Details",  "type": "main", "index": 0 }
+      ]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "versionId": "nexflow-form-v4",
+  "id": "nexflow-workflow-1",
+  "tags": []
+}

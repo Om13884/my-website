@@ -1,0 +1,595 @@
+{
+  "name": "1 — Contact Form: Receive → AI Score → Slots → Sheets → Emails",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "contact-form",
+        "options": {}
+      },
+      "id": "641a9cc5-1198-49c4-8e3b-0aa7aad92e4c",
+      "name": "Receive Form (Webhook)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -976,
+        144
+      ],
+      "webhookId": "nexflow-contact-form"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=New contact form submission:\n\nName: {{ $json.body.firstName }} {{ $json.body.lastName }}\nEmail: {{ $json.body.email }}\nPhone: {{ $json.body.phone }}\nCompany: {{ $json.body.company }}\nMonthly Revenue: {{ $json.body.revenue }}\nService: {{ $json.body.service }}\nTimeline: {{ $json.body.timeline }}\nSubmitted: {{ $json.body.submittedAt }}\n\nMessage:\n{{ $json.body.message }}\n\nAnalyze this lead and return ONLY the lead summary — no JSON, no code blocks, just plain text.",
+        "options": {
+          "systemMessage": "role :You are an AI assistant for Omkar Biradar, an embedded AI automation consultant in Bangalore, India.\n\ntask: A new contact form has arrived. Analyze it and return a plain-text LEAD SUMMARY for Omkar.\n\nFormat:\n- Line 1: Score — 🔥 HOT / 🟡 WARM / ❄️ COLD (judge by message clarity, urgency, budget, company size)\n- Bullet points: name, company, email, service requested, revenue range, timeline, core problem they need solved, any red flags\n- Last line — Recommended action: one clear next step (e.g. \"Call within 2 hours — specific ask, strong budget signal\")\n\nReturn plain text only. No JSON. No markdown headers.\n\nnotes : before writting aboute the slots available check the calender that what are the times that we are has a slots  available on that bases only you will provide the slots to them. \n\n"
+        }
+      },
+      "id": "0f4a2436-0373-4460-85f8-273e9b76bcf9",
+      "name": "AI Agent: Score Lead",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -736,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── Parse AI lead summary + generate submission ID + IST time slots ──\n\nconst agentOut = $input.first().json;\nconst raw = $('Receive Form (Webhook)').first().json;\n\n// n8n webhook node puts body fields at top-level AND keeps a 'body' object.\n// Prefer top-level fields; fall back to body sub-object.\nconst form = (raw.firstName || raw.email) ? raw : (raw.body || raw);\n\nconst firstName   = String(form.firstName   || '').trim();\nconst lastName    = String(form.lastName    || '').trim();\nconst email       = String(form.email       || '').trim();\nconst phone       = String(form.phone       || '').trim();\nconst company     = String(form.company     || '').trim();\nconst revenue     = String(form.revenue     || '').trim();\nconst service     = String(form.service     || '').trim();\nconst timeline    = String(form.timeline    || '').trim();\nconst message     = String(form.message     || '').trim();\nconst submittedAt = String(form.submittedAt || new Date().toISOString());\n\n// Extract lead summary from agent output\nconst leadSummary = agentOut.output || agentOut.text || agentOut.message?.content ||\n  '⚠️ AI scoring unavailable — review manually.';\n\n// ── Time slot generation (Omkar availability: Mon–Fri IST) ──\nconst IST = 19800000; // UTC+5:30 in ms\n\nfunction istLabel(utcMs) {\n  const d = new Date(utcMs + IST);\n  const DAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];\n  const MON  = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];\n  const h = d.getUTCHours(), m = d.getUTCMinutes();\n  const ap = h >= 12 ? 'PM' : 'AM';\n  const h12 = h % 12 || 12;\n  return DAYS[d.getUTCDay()] + ', ' + d.getUTCDate() + ' ' + MON[d.getUTCMonth()] +\n         ' at ' + h12 + ':' + String(m).padStart(2,'0') + ' ' + ap + ' IST';\n}\n\nconst PREFS = [{h:10,m:30},{h:12,m:0},{h:15,m:0},{h:17,m:0}];\nconst now = new Date();\nconst slots = [];\nlet dayOffset = 1;\n\nwhile (slots.length < 5 && dayOffset <= 14) {\n  const baseUTC = new Date(now.getTime() + dayOffset * 86400000);\n  const baseIST = new Date(baseUTC.getTime() + IST);\n  const dow = baseIST.getUTCDay();\n  if (dow >= 1 && dow <= 5) {\n    for (const p of PREFS) {\n      if (slots.length >= 5) break;\n      const utcMs = Date.UTC(\n        baseIST.getUTCFullYear(), baseIST.getUTCMonth(), baseIST.getUTCDate(),\n        p.h, p.m, 0, 0\n      ) - IST;\n      slots.push({\n        index:    slots.length + 1,\n        label:    istLabel(utcMs),\n        startISO: new Date(utcMs).toISOString(),\n        endISO:   new Date(utcMs + 1800000).toISOString()\n      });\n    }\n  }\n  dayOffset++;\n}\n\nconst submissionId = 'NXF-' + Date.now();\nconst slotsJSON = JSON.stringify(slots);\nconst slotsText = slots.map(s => 'Option ' + s.index + ': ' + s.label).join('\\n');\nconst slotsHTML = slots.map(s =>\n  '<p style=\"margin:6px 0;\"><strong>Option ' + s.index + ':</strong> ' + s.label + '</p>'\n).join('');\n\n// Return ONLY clean form fields — no webhook metadata (headers, params, body, etc.)\nreturn [{\n  json: {\n    firstName,\n    lastName,\n    email,\n    phone,\n    company,\n    revenue,\n    service,\n    timeline,\n    message,\n    submittedAt,\n    leadSummary,\n    submissionId,\n    slotsJSON,\n    slotsText,\n    slotsHTML\n  }\n}];"
+      },
+      "id": "638ed310-659d-47d5-b1c7-f8f8d805ea7b",
+      "name": "Parse AI + Generate Slots + ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -480,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1xn96KBeYO6osMkYp8jX0bB5LFkGQ4LJ5OrLwEUYkPHw",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Submissions",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {
+            "leadSummary": "={{ $json.leadSummary }}",
+            "submissionId": "={{ $json.submissionId }}",
+            "slots": "={{ $json.slotsJSON }}",
+            "slotsJSON": "={{ $json.slotsJSON }}",
+            "slotsText": "={{ $json.slotsText }}",
+            "slotsHTML": "={{ $json.slotsHTML }}",
+            "clientEmail": "={{ $json.email }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "headers",
+              "displayName": "headers",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "params",
+              "displayName": "params",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "query",
+              "displayName": "query",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "body",
+              "displayName": "body",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "webhookUrl",
+              "displayName": "webhookUrl",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "executionMode",
+              "displayName": "executionMode",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "leadSummary",
+              "displayName": "leadSummary",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "submissionId",
+              "displayName": "submissionId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "slots",
+              "displayName": "slots",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "slotsJSON",
+              "displayName": "slotsJSON",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "slotsText",
+              "displayName": "slotsText",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "slotsHTML",
+              "displayName": "slotsHTML",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "_skip",
+              "displayName": "_skip",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "slotChoice",
+              "displayName": "slotChoice",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "clientEmail",
+              "displayName": "clientEmail",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "emailSubject",
+              "displayName": "emailSubject",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "emailBody",
+              "displayName": "emailBody",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "firstName",
+              "displayName": "firstName",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "lastName",
+              "displayName": "lastName",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "phone",
+              "displayName": "phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "company",
+              "displayName": "company",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "service",
+              "displayName": "service",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "chosenSlotLabel",
+              "displayName": "chosenSlotLabel",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "chosenSlotStartISO",
+              "displayName": "chosenSlotStartISO",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "chosenSlotEndISO",
+              "displayName": "chosenSlotEndISO",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "rowIndex",
+              "displayName": "rowIndex",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "meetLink",
+              "displayName": "meetLink",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "calLink",
+              "displayName": "calLink",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "eventId",
+              "displayName": "eventId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "bookingConfirmedAt",
+              "displayName": "bookingConfirmedAt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "revenue",
+              "displayName": "revenue",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "timeline",
+              "displayName": "timeline",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "submittedAt",
+              "displayName": "submittedAt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "e1d95223-73f4-483f-b555-4c32106307b7",
+      "name": "Save to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [
+        -240,
+        144
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "04sgdnfUmifmADK3",
+          "name": "GoogSheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Parse AI + Generate Slots + ID').first().json.email }}",
+        "subject": "=Available Time Slots — Ref: {{ $('Parse AI + Generate Slots + ID').first().json.submissionId }}",
+        "message": "=<div style=\"font-family:Arial,sans-serif;max-width:580px;margin:0 auto;color:#111;line-height:1.6;\">\n<p>Hi {{ $('Parse AI + Generate Slots + ID').first().json.firstName }},</p>\n<p>Thanks for reaching out about <strong>{{ $('Parse AI + Generate Slots + ID').first().json.service }}</strong>. I'd love to connect over a free 30-minute strategy call.</p>\n<p>Here are my available slots — all times are in <strong>IST (Bangalore, India, UTC+5:30)</strong>:</p>\n<div style=\"background:#f5f5ff;border-left:4px solid #6366f1;padding:16px;border-radius:6px;margin:20px 0;\">\n{{ $('Parse AI + Generate Slots + ID').first().json.slotsHTML }}\n</div>\n<p><strong>Reply to this email</strong> with the option number that works for you — e.g. <em>\"Option 2 works for me\"</em> — and I'll confirm your booking with a Google Meet link right away.</p>\n<p>If none of these times work, just tell me your preferred window.</p>\n<p>Best,<br><strong>Omkar Biradar</strong><br>AI Automation Consultant<br>omkar13884@gmail.com | +91 99727 34513</p>\n<hr style=\"border:none;border-top:1px solid #eee;margin:24px 0;\">\n<p style=\"font-size:11px;color:#aaa;\">Ref: {{ $('Parse AI + Generate Slots + ID').first().json.submissionId }} — keep this in your reply so I can match your booking.</p>\n</div>",
+        "options": {
+          "senderName": "Omkar Biradar",
+          "replyTo": "omkar13884@gmail.com"
+        }
+      },
+      "id": "c0ef608d-2190-4842-bad6-ad817b1f34c1",
+      "name": "Email Client: Time Slots",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "d60e79a0-fab5-4666-9dd5-2af57c5a06db",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "HEsIhZ5Z1n8mKXIL",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "omkar13884@gmail.com",
+        "subject": "=🔔 New Lead: {{ $('Parse AI + Generate Slots + ID').first().json.firstName }} {{ $('Parse AI + Generate Slots + ID').first().json.lastName }} — {{ $('Parse AI + Generate Slots + ID').first().json.service }}",
+        "emailType": "text",
+        "message": "=── AI LEAD SCORE ────────────────────\n{{ $('Parse AI + Generate Slots + ID').first().json.leadSummary }}\n\n── CONTACT DETAILS ──────────────────\nName:      {{ $('Parse AI + Generate Slots + ID').first().json.firstName }} {{ $('Parse AI + Generate Slots + ID').first().json.lastName }}\nEmail:     {{ $('Parse AI + Generate Slots + ID').first().json.email }}\nPhone:     {{ $('Parse AI + Generate Slots + ID').first().json.phone }}\nCompany:   {{ $('Parse AI + Generate Slots + ID').first().json.company }}\nRevenue:   {{ $('Parse AI + Generate Slots + ID').first().json.revenue }}\nService:   {{ $('Parse AI + Generate Slots + ID').first().json.service }}\nTimeline:  {{ $('Parse AI + Generate Slots + ID').first().json.timeline }}\nRef ID:    {{ $('Parse AI + Generate Slots + ID').first().json.submissionId }}\nSubmitted: {{ $('Parse AI + Generate Slots + ID').first().json.submittedAt }}\n\n── MESSAGE ──────────────────────────\n{{ $('Parse AI + Generate Slots + ID').first().json.message }}\n\n── TIME SLOTS SENT TO CLIENT ────────\n{{ $('Parse AI + Generate Slots + ID').first().json.slotsText }}\n\nWaiting for client to reply with their preferred slot.",
+        "options": {
+          "senderName": "Omkar Contact Form"
+        }
+      },
+      "id": "7e2ebdf0-8f11-4ba7-93b8-96446340d20c",
+      "name": "Email Omkar: Lead Score + Details",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        288
+      ],
+      "webhookId": "86c25f6b-d49b-4003-8db2-a14941af0973",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "HEsIhZ5Z1n8mKXIL",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "llama-3.1-8b-instant",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        -880,
+        352
+      ],
+      "id": "08af36bb-8814-4027-aa92-bdb73f116c3e",
+      "name": "Groq Chat Model",
+      "credentials": {
+        "groqApi": {
+          "id": "vsNFUko3uOC2yaj8",
+          "name": "Groq account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Receive Form (Webhook)": {
+      "main": [
+        [
+          {
+            "node": "AI Agent: Score Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent: Score Lead": {
+      "main": [
+        [
+          {
+            "node": "Parse AI + Generate Slots + ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI + Generate Slots + ID": {
+      "main": [
+        [
+          {
+            "node": "Save to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save to Google Sheets": {
+      "main": [
+        [
+          {
+            "node": "Email Client: Time Slots",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Email Omkar: Lead Score + Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent: Score Lead",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "26a106ce-ce29-4e1b-8bfa-d304ec19cfb7",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f1a00e2f29c669bd85fbe2300872a8c417cac110386c2f49eb26df11cb0577ed"
+  },
+  "id": "OMaRC3X5lvqp3z1g",
+  "tags": []
+}
