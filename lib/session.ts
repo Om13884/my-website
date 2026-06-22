@@ -19,9 +19,10 @@ function bufToHex(buf: ArrayBuffer): string {
     .join('')
 }
 
-function hexToBuf(hex: string): Uint8Array {
+function hexToBuf(hex: string): Uint8Array<ArrayBuffer> {
   const pairs = hex.match(/.{2}/g) ?? []
-  return new Uint8Array(pairs.map(h => parseInt(h, 16)))
+  const arr = new Uint8Array(pairs.map(h => parseInt(h, 16)))
+  return new Uint8Array(arr.buffer.slice(0))
 }
 
 export async function createSessionToken(): Promise<string> {
